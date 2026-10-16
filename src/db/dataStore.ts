@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { ProjectItem, TypingScoreItem, ContactMessage } from "../types";
+import { ProjectItem, TypingScoreItem, ContactMessage, OffScreenPhotoItem } from "../types";
 
 const DATA_DIR = path.resolve(__dirname, "../../data");
 const DB_FILE = path.join(DATA_DIR, "db.json");
@@ -9,6 +9,7 @@ interface DatabaseSchema {
   projects: ProjectItem[];
   scores: TypingScoreItem[];
   messages: ContactMessage[];
+  photos: OffScreenPhotoItem[];
 }
 
 const DEFAULT_PROJECTS: ProjectItem[] = [
@@ -120,6 +121,17 @@ const DEFAULT_SCORES: TypingScoreItem[] = [
   { id: "score-5", playerName: "SpeedDaemon", wpm: 68, accuracy: 94.2, createdAt: new Date(Date.now() - 3600000 * 48).toISOString() },
 ];
 
+const DEFAULT_PHOTOS: OffScreenPhotoItem[] = [
+  { id: "photo-1", caption: "coffee & toast", imageUrl: "", order: 1, rotation: -6 },
+  { id: "photo-2", caption: "night lights", imageUrl: "", order: 2, rotation: -3 },
+  { id: "photo-3", caption: "workspace desk", imageUrl: "", order: 3, rotation: -1 },
+  { id: "photo-4", caption: "cat doodle", imageUrl: "", order: 4, rotation: 1 },
+  { id: "photo-5", caption: "crescent moon", imageUrl: "", order: 5, rotation: -2 },
+  { id: "photo-6", caption: "portrait", imageUrl: "", order: 6, rotation: 3 },
+  { id: "photo-7", caption: "rocky cove", imageUrl: "", order: 7, rotation: -1 },
+  { id: "photo-8", caption: "dog in the sun", imageUrl: "", order: 8, rotation: 5 },
+];
+
 class DataStore {
   private data: DatabaseSchema;
 
@@ -143,6 +155,10 @@ class DataStore {
             techStack: p.techStack || p.tags || [],
           }));
         }
+        if (!Array.isArray(parsed.photos)) {
+          parsed.photos = DEFAULT_PHOTOS;
+          this.persist(parsed);
+        }
         return parsed;
       }
     } catch (err) {
@@ -152,6 +168,7 @@ class DataStore {
       projects: DEFAULT_PROJECTS,
       scores: DEFAULT_SCORES,
       messages: [],
+      photos: DEFAULT_PHOTOS,
     };
     this.persist(initial);
     return initial;
@@ -253,6 +270,60 @@ class DataStore {
     this.data.messages.push(newMsg);
     this.persist();
     return newMsg;
+  }
+
+  // Photos CRUD
+  getPhotos(): OffScreenPhotoItem[] {
+    return [...(this.data.photos || [])].sort((a, b) => a.order - b.order);
+  }
+
+  getPhotoById(id: string): OffScreenPhotoItem | undefined {
+    return (this.data.photos || []).find((p) => p.id === id);
+  }
+
+  updatePhoto(id: string, updates: Partial<OffScreenPhotoItem>): OffScreenPhotoItem | null {
+    if (!this.data.photos) this.data.photos = [...DEFAULT_PHOTOS];
+    const index = this.data.photos.findIndex((p) => p.id === id);
+    if (index === -1) return null;
+    this.data.photos[index] = {
+      ...this.data.photos[index],
+      ...updates,
+      updatedAt: new Date().toISOString(),
+    };
+    this.persist();
+    return this.data.photos[index];
+  }
+
+  updateAllPhotos(photos: OffScreenPhotoItem[]): OffScreenPhotoItem[] {
+    this.data.photos = photos.map((p, idx) => ({
+      ...p,
+      order: typeof p.order === "number" ? p.order : idx + 1,
+      updatedAt: new Date().toISOString(),
+    }));
+    this.persist();
+    return this.getPhotos();
+  }
+
+  createPhoto(photo: Omit<OffScreenPhotoItem, "id">): OffScreenPhotoItem {
+    if (!this.data.photos) this.data.photos = [...DEFAULT_PHOTOS];
+    const newPhoto: OffScreenPhotoItem = {
+      ...photo,
+      id: `photo-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    this.data.photos.push(newPhoto);
+    this.persist();
+    return newPhoto;
+  }
+
+  deletePhoto(id: string): boolean {
+    if (!this.data.photos) return false;
+    const initialLen = this.data.photos.length;
+    this.data.photos = this.data.photos.filter((p) => p.id !== id);
+    const deleted = this.data.photos.length < initialLen;
+    if (deleted) this.persist();
+    return deleted;
   }
 }
 

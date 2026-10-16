@@ -1,9 +1,10 @@
 export interface ProjectItem {
   id: string;
   title: string;
+  slug?: string;
   subtitle?: string;
   description: string;
-  tags: string[];
+  tags?: string[];
   techStack?: string[];
   imageUrl?: string;
   liveUrl?: string;
@@ -42,4 +43,14 @@ export interface AdminUser {
   id: string;
   email: string;
   name: string;
+}
+
+export interface OffScreenPhotoItem {
+  id: string;
+  caption: string;
+  imageUrl?: string;
+  order: number;
+  rotation?: number;
+  createdAt?: string;
+  updatedAt?: string;
 }

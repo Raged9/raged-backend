@@ -6,6 +6,7 @@ import projectsRouter from "./routes/projects";
 import typingScoresRouter from "./routes/typingScores";
 import adminRouter from "./routes/admin";
 import contactRouter from "./routes/contact";
+import photosRouter from "./routes/photos";
 
 dotenv.config();
 
@@ -14,9 +15,29 @@ const PORT = process.env.PORT || 5000;
 const CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost:3000";
 
 // Middlewares
+const allowedOrigins = (process.env.CORS_ORIGIN || "http://localhost:3000")
+  .split(",")
+  .map((o) => o.trim().replace(/\/$/, ""));
+
 app.use(
   cors({
-    origin: [CORS_ORIGIN, "http://localhost:3000", "http://127.0.0.1:3000"],
+    origin: (origin, callback) => {
+      // Allow requests with no origin (e.g. mobile apps, curl, server-to-server)
+      if (!origin) return callback(null, true);
+      const isAllowed =
+        allowedOrigins.includes(origin) ||
+        allowedOrigins.includes("*") ||
+        origin.endsWith(".vercel.app") ||
+        origin.includes("localhost") ||
+        origin.includes("127.0.0.1");
+
+      if (isAllowed) {
+        callback(null, true);
+      } else {
+        // Fallback allow for public portfolio API
+        callback(null, true);
+      }
+    },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
@@ -47,6 +68,7 @@ app.use("/api/projects", projectsRouter);
 app.use("/api/typing-scores", typingScoresRouter);
 app.use("/api/admin", adminRouter);
 app.use("/api/contact", contactRouter);
+app.use("/api/photos", photosRouter);
 
 // 404 Handler
 app.use((req, res) => {

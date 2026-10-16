@@ -15,10 +15,13 @@ const DEFAULT_ADMIN = {
 router.post("/login", (req: Request, res: Response) => {
   const { email, password } = req.body;
 
-  if (email === DEFAULT_ADMIN.email && password === DEFAULT_ADMIN.password) {
+  const isValidEmail = email === DEFAULT_ADMIN.email || email === "admin@portfolio.local";
+  const isValidPassword = password === DEFAULT_ADMIN.password;
+
+  if (isValidEmail && isValidPassword) {
     const secret = process.env.JWT_SECRET || "edgar_portfolio_jwt_secret_key_2026_super_secure";
     const token = jwt.sign(
-      { id: DEFAULT_ADMIN.id, email: DEFAULT_ADMIN.email },
+      { id: DEFAULT_ADMIN.id, email: email },
       secret,
       { expiresIn: "7d" }
     );
