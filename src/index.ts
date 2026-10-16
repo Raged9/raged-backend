@@ -45,6 +45,14 @@ app.use(
 );
 app.use(express.json());
 
+// Normalize multiple slashes in URL path (e.g. //api/admin/login -> /api/admin/login)
+app.use((req, res, next) => {
+  if (req.url && req.url.includes("//")) {
+    req.url = req.url.replace(/\/+/g, "/");
+  }
+  next();
+});
+
 // Request logger
 app.use((req, res, next) => {
   const start = Date.now();
