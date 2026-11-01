@@ -43,7 +43,7 @@ app.use(
     allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
-app.use(express.json());
+app.use(express.json({ limit: "25mb" })); app.use(express.urlencoded({ limit: "25mb", extended: true }));
 
 // Normalize multiple slashes in URL path (e.g. //api/admin/login -> /api/admin/login)
 app.use((req, res, next) => {
