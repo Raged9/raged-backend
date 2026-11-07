@@ -142,6 +142,16 @@ const DEFAULT_PHOTOS: OffScreenPhotoItem[] = [
   { id: "photo-8", caption: "dog in the sun", imageUrl: "", order: 8, rotation: 5 },
 ];
 
+function normalizeUrl(url?: string | null): string {
+  if (!url) return "";
+  const trimmed = url.trim();
+  if (!trimmed) return "";
+  if (/^(https?:\/\/|mailto:|tel:|\/|#)/i.test(trimmed)) {
+    return trimmed;
+  }
+  return `https://${trimmed}`;
+}
+
 function mapRowToProject(row: any): ProjectItem {
   const tags = Array.isArray(row.tags) ? row.tags : [];
   const techStack = Array.isArray(row.tech_stack) && row.tech_stack.length > 0 ? row.tech_stack : tags;
@@ -152,6 +162,8 @@ function mapRowToProject(row: any): ProjectItem {
       ? [row.image_url]
       : [];
   const imageUrl = images[0] || row.image_url || "";
+  const normalizedLive = normalizeUrl(row.live_url || row.project_url);
+  const normalizedProject = normalizeUrl(row.project_url || row.live_url);
 
   return {
     id: row.id,
@@ -163,9 +175,9 @@ function mapRowToProject(row: any): ProjectItem {
     techStack,
     images,
     imageUrl,
-    liveUrl: row.live_url || row.project_url || "",
-    projectUrl: row.project_url || row.live_url || "",
-    githubUrl: row.github_url || "",
+    liveUrl: normalizedLive,
+    projectUrl: normalizedProject,
+    githubUrl: normalizeUrl(row.github_url),
     year: row.year || "2024",
     featured: Boolean(row.featured),
     order: typeof row.sort_order === "number" ? row.sort_order : 99,
