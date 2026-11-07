@@ -7,6 +7,7 @@ export interface ProjectItem {
   tags?: string[];
   techStack?: string[];
   imageUrl?: string;
+  images?: string[];
   liveUrl?: string;
   projectUrl?: string;
   githubUrl?: string;

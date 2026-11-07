@@ -1,6 +1,10 @@
 import fs from "fs";
 import path from "path";
+import { Pool } from "pg";
+import dotenv from "dotenv";
 import { ProjectItem, TypingScoreItem, ContactMessage, OffScreenPhotoItem } from "../types";
+
+dotenv.config();
 
 const DATA_DIR = path.resolve(__dirname, "../../data");
 const DB_FILE = path.join(DATA_DIR, "db.json");
@@ -21,6 +25,8 @@ const DEFAULT_PROJECTS: ProjectItem[] = [
       "A tailored full-stack CMS engineered for scalable digital content workflows with dynamic schema, fast API responses, and role-based permissions.",
     tags: ["Next.js", "TypeScript", "Node.js", "PostgreSQL", "Tailwind CSS"],
     techStack: ["Next.js", "TypeScript", "Node.js", "PostgreSQL", "Tailwind CSS"],
+    images: [],
+    imageUrl: "",
     liveUrl: "https://tenthirty.example.com",
     projectUrl: "https://tenthirty.example.com",
     githubUrl: "https://github.com/Raged9/ten-thirty-solutions",
@@ -54,6 +60,8 @@ const DEFAULT_PROJECTS: ProjectItem[] = [
       "An interactive tactile typing application inspired by mechanical typewriters, featuring real-time WPM analytics and audio-haptic feedback.",
     tags: ["React", "TypeScript", "Motion", "Web Audio API", "Tailwind CSS"],
     techStack: ["React", "TypeScript", "Motion", "Web Audio API", "Tailwind CSS"],
+    images: [],
+    imageUrl: "",
     liveUrl: "https://type-o-matic.example.com",
     projectUrl: "https://type-o-matic.example.com",
     githubUrl: "https://github.com/Raged9/type-o-matic",
@@ -86,6 +94,8 @@ const DEFAULT_PROJECTS: ProjectItem[] = [
       "A natural language processing system that analyzes Google Maps review sentiments and extracts cafe ambience profiles to recommend ideal study spots.",
     tags: ["Python", "NLP", "FastAPI", "Cosine Similarity", "TF-IDF", "React"],
     techStack: ["Python", "NLP", "FastAPI", "Cosine Similarity", "TF-IDF", "React"],
+    images: [],
+    imageUrl: "",
     liveUrl: "https://cafe-rec.example.com",
     projectUrl: "https://cafe-rec.example.com",
     githubUrl: "https://github.com/Raged9/nlp-cafe-recommendation",
@@ -132,14 +142,248 @@ const DEFAULT_PHOTOS: OffScreenPhotoItem[] = [
   { id: "photo-8", caption: "dog in the sun", imageUrl: "", order: 8, rotation: 5 },
 ];
 
+function mapRowToProject(row: any): ProjectItem {
+  const tags = Array.isArray(row.tags) ? row.tags : [];
+  const techStack = Array.isArray(row.tech_stack) && row.tech_stack.length > 0 ? row.tech_stack : tags;
+  const images =
+    Array.isArray(row.images) && row.images.length > 0
+      ? row.images.filter(Boolean)
+      : row.image_url
+      ? [row.image_url]
+      : [];
+  const imageUrl = images[0] || row.image_url || "";
+
+  return {
+    id: row.id,
+    title: row.title,
+    slug: row.slug || row.id,
+    subtitle: row.subtitle || "",
+    description: row.description,
+    tags: tags.length > 0 ? tags : techStack,
+    techStack,
+    images,
+    imageUrl,
+    liveUrl: row.live_url || row.project_url || "",
+    projectUrl: row.project_url || row.live_url || "",
+    githubUrl: row.github_url || "",
+    year: row.year || "2024",
+    featured: Boolean(row.featured),
+    order: typeof row.sort_order === "number" ? row.sort_order : 99,
+    caseStudy: row.case_study || undefined,
+    createdAt: row.created_at ? new Date(row.created_at).toISOString() : undefined,
+    updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : undefined,
+  };
+}
+
+function mapRowToPhoto(row: any): OffScreenPhotoItem {
+  return {
+    id: row.id,
+    caption: row.caption,
+    imageUrl: row.image_url || "",
+    order: typeof row.sort_order === "number" ? row.sort_order : 1,
+    rotation: Number(row.rotation) || 0,
+    createdAt: row.created_at ? new Date(row.created_at).toISOString() : undefined,
+    updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : undefined,
+  };
+}
+
 class DataStore {
   private data: DatabaseSchema;
+  private pool: Pool | null = null;
+  private isPostgresReady = false;
 
   constructor() {
-    this.data = this.load();
+    this.data = this.loadLocalJson();
   }
 
-  private load(): DatabaseSchema {
+  public getStorageMode(): string {
+    return this.isPostgresReady ? "postgresql" : "local-json-fallback";
+  }
+
+  /**
+   * Initializes PostgreSQL connection pool, creates tables if missing,
+   * and migrates any existing local db.json data on first run.
+   */
+  public async init(): Promise<void> {
+    const rawDbUrl = process.env.DATABASE_URL?.trim();
+    if (!rawDbUrl) {
+      console.warn(
+        "⚠️ [DataStore] DATABASE_URL is not set in environment. Running with local JSON file (ephemeral on Render!)."
+      );
+      return;
+    }
+
+    // Normalize connection string for node-postgres compatibility
+    const dbUrl = rawDbUrl.replace(/[?&]channel_binding=require/g, "");
+    const isLocalhost = dbUrl.includes("localhost") || dbUrl.includes("127.0.0.1");
+
+    try {
+      this.pool = new Pool({
+        connectionString: dbUrl,
+        ssl: isLocalhost ? false : { rejectUnauthorized: false },
+        max: 10,
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: 10000,
+      });
+
+      // Verify connection & create schema
+      await this.pool.query(`
+        CREATE TABLE IF NOT EXISTS portfolio_meta (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL,
+          updated_at TIMESTAMPTZ DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS portfolio_projects (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          slug TEXT,
+          subtitle TEXT,
+          description TEXT NOT NULL,
+          tags JSONB DEFAULT '[]'::jsonb,
+          tech_stack JSONB DEFAULT '[]'::jsonb,
+          image_url TEXT DEFAULT '',
+          images JSONB DEFAULT '[]'::jsonb,
+          live_url TEXT DEFAULT '',
+          project_url TEXT DEFAULT '',
+          github_url TEXT DEFAULT '',
+          year TEXT DEFAULT '2024',
+          featured BOOLEAN DEFAULT false,
+          sort_order INTEGER DEFAULT 99,
+          case_study JSONB,
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          updated_at TIMESTAMPTZ DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS portfolio_photos (
+          id TEXT PRIMARY KEY,
+          caption TEXT NOT NULL,
+          image_url TEXT DEFAULT '',
+          sort_order INTEGER DEFAULT 1,
+          rotation NUMERIC DEFAULT 0,
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          updated_at TIMESTAMPTZ DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS typing_scores (
+          id TEXT PRIMARY KEY,
+          player_name TEXT NOT NULL,
+          wpm INTEGER NOT NULL,
+          accuracy NUMERIC NOT NULL,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS contact_messages (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          email TEXT NOT NULL,
+          message TEXT NOT NULL,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        );
+      `);
+
+      this.isPostgresReady = true;
+      console.log("✅ [DataStore] Connected to PostgreSQL permanent storage!");
+
+      await this.seedPostgresIfNeeded();
+    } catch (err) {
+      console.error("❌ [DataStore] Failed to initialize PostgreSQL, falling back to local JSON:", err);
+      this.isPostgresReady = false;
+      this.pool = null;
+    }
+  }
+
+  private async seedPostgresIfNeeded(): Promise<void> {
+    if (!this.pool) return;
+
+    const metaRes = await this.pool.query(
+      `SELECT value FROM portfolio_meta WHERE key = 'initial_seed_v1'`
+    );
+    const alreadySeeded = (metaRes.rowCount ?? 0) > 0;
+
+    // Seed projects if never seeded and table is empty
+    const projCountRes = await this.pool.query(`SELECT COUNT(*)::int AS cnt FROM portfolio_projects`);
+    if (!alreadySeeded && projCountRes.rows[0].cnt === 0) {
+      const sourceProjects = this.data.projects.length > 0 ? this.data.projects : DEFAULT_PROJECTS;
+      for (const p of sourceProjects) {
+        const images =
+          Array.isArray(p.images) && p.images.length > 0
+            ? p.images.filter(Boolean)
+            : p.imageUrl
+            ? [p.imageUrl]
+            : [];
+        const tags = p.tags || p.techStack || [];
+        await this.pool.query(
+          `INSERT INTO portfolio_projects (
+            id, title, slug, subtitle, description, tags, tech_stack,
+            image_url, images, live_url, project_url, github_url,
+            year, featured, sort_order, case_study, created_at, updated_at
+          ) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9::jsonb,$10,$11,$12,$13,$14,$15,$16::jsonb,$17,$18)
+          ON CONFLICT (id) DO NOTHING`,
+          [
+            p.id,
+            p.title,
+            p.slug || p.id,
+            p.subtitle || "",
+            p.description,
+            JSON.stringify(tags),
+            JSON.stringify(p.techStack || tags),
+            images[0] || p.imageUrl || "",
+            JSON.stringify(images),
+            p.liveUrl || p.projectUrl || "",
+            p.projectUrl || p.liveUrl || "",
+            p.githubUrl || "",
+            p.year || "2024",
+            Boolean(p.featured),
+            typeof p.order === "number" ? p.order : 99,
+            p.caseStudy ? JSON.stringify(p.caseStudy) : null,
+            p.createdAt || new Date().toISOString(),
+            p.updatedAt || new Date().toISOString(),
+          ]
+        );
+      }
+      console.log(`🌱 [DataStore] Seeded ${sourceProjects.length} projects into PostgreSQL.`);
+    }
+
+    // Always ensure the 8 Off-Screen Polaroid slots exist if table is empty
+    const photoCountRes = await this.pool.query(`SELECT COUNT(*)::int AS cnt FROM portfolio_photos`);
+    if (photoCountRes.rows[0].cnt === 0) {
+      const sourcePhotos = this.data.photos.length > 0 ? this.data.photos : DEFAULT_PHOTOS;
+      for (const ph of sourcePhotos) {
+        await this.pool.query(
+          `INSERT INTO portfolio_photos (id, caption, image_url, sort_order, rotation, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+           ON CONFLICT (id) DO NOTHING`,
+          [ph.id, ph.caption, ph.imageUrl || "", ph.order || 1, ph.rotation || 0]
+        );
+      }
+      console.log(`🌱 [DataStore] Seeded ${sourcePhotos.length} off-screen photos into PostgreSQL.`);
+    }
+
+    // Seed default leaderboard scores if empty and never seeded
+    const scoreCountRes = await this.pool.query(`SELECT COUNT(*)::int AS cnt FROM typing_scores`);
+    if (!alreadySeeded && scoreCountRes.rows[0].cnt === 0) {
+      const sourceScores = this.data.scores.length > 0 ? this.data.scores : DEFAULT_SCORES;
+      for (const s of sourceScores) {
+        await this.pool.query(
+          `INSERT INTO typing_scores (id, player_name, wpm, accuracy, created_at)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (id) DO NOTHING`,
+          [s.id, s.playerName, s.wpm, s.accuracy, s.createdAt || new Date().toISOString()]
+        );
+      }
+      console.log(`🌱 [DataStore] Seeded ${sourceScores.length} leaderboard scores into PostgreSQL.`);
+    }
+
+    if (!alreadySeeded) {
+      await this.pool.query(
+        `INSERT INTO portfolio_meta (key, value) VALUES ('initial_seed_v1', 'true')
+         ON CONFLICT (key) DO UPDATE SET value = 'true', updated_at = NOW()`
+      );
+    }
+  }
+
+  private loadLocalJson(): DatabaseSchema {
     try {
       if (!fs.existsSync(DATA_DIR)) {
         fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -147,17 +391,26 @@ class DataStore {
       if (fs.existsSync(DB_FILE)) {
         const raw = fs.readFileSync(DB_FILE, "utf-8");
         const parsed = JSON.parse(raw);
-        // Normalize projects to always have tags
         if (Array.isArray(parsed.projects)) {
-          parsed.projects = parsed.projects.map((p: any) => ({
-            ...p,
-            tags: p.tags || p.techStack || [],
-            techStack: p.techStack || p.tags || [],
-          }));
+          parsed.projects = parsed.projects.map((p: any) => {
+            const images =
+              Array.isArray(p.images) && p.images.length > 0
+                ? p.images.filter(Boolean)
+                : p.imageUrl
+                ? [p.imageUrl]
+                : [];
+            return {
+              ...p,
+              tags: p.tags || p.techStack || [],
+              techStack: p.techStack || p.tags || [],
+              images,
+              imageUrl: images[0] || p.imageUrl || "",
+            };
+          });
         }
         if (!Array.isArray(parsed.photos)) {
           parsed.photos = DEFAULT_PHOTOS;
-          this.persist(parsed);
+          this.persistLocalJson(parsed);
         }
         return parsed;
       }
@@ -170,11 +423,11 @@ class DataStore {
       messages: [],
       photos: DEFAULT_PHOTOS,
     };
-    this.persist(initial);
+    this.persistLocalJson(initial);
     return initial;
   }
 
-  private persist(schema?: DatabaseSchema) {
+  private persistLocalJson(schema?: DatabaseSchema) {
     try {
       if (!fs.existsSync(DATA_DIR)) {
         fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -185,62 +438,237 @@ class DataStore {
     }
   }
 
+  // ============================================================================
   // Projects CRUD
-  getProjects(): ProjectItem[] {
+  // ============================================================================
+  async getProjects(): Promise<ProjectItem[]> {
+    if (this.isPostgresReady && this.pool) {
+      const res = await this.pool.query(
+        `SELECT * FROM portfolio_projects ORDER BY sort_order ASC, created_at ASC`
+      );
+      return res.rows.map(mapRowToProject);
+    }
+
     return [...this.data.projects]
-      .map((p) => ({
-        ...p,
-        tags: p.tags || p.techStack || [],
-        techStack: p.techStack || p.tags || [],
-      }))
+      .map((p) => {
+        const images =
+          Array.isArray(p.images) && p.images.length > 0
+            ? p.images.filter(Boolean)
+            : p.imageUrl
+            ? [p.imageUrl]
+            : [];
+        return {
+          ...p,
+          tags: p.tags || p.techStack || [],
+          techStack: p.techStack || p.tags || [],
+          images,
+          imageUrl: images[0] || p.imageUrl || "",
+        };
+      })
       .sort((a, b) => (a.order || 99) - (b.order || 99));
   }
 
-  getProjectById(id: string): ProjectItem | undefined {
-    return this.data.projects.find((p) => p.id === id || p.title.toLowerCase().replace(/[^a-z0-9]+/g, "-") === id);
+  async getProjectById(id: string): Promise<ProjectItem | undefined> {
+    if (this.isPostgresReady && this.pool) {
+      const res = await this.pool.query(
+        `SELECT * FROM portfolio_projects WHERE id = $1 OR slug = $1 LIMIT 1`,
+        [id]
+      );
+      if ((res.rowCount ?? 0) > 0) {
+        return mapRowToProject(res.rows[0]);
+      }
+      return undefined;
+    }
+
+    return this.data.projects.find(
+      (p) => p.id === id || p.title.toLowerCase().replace(/[^a-z0-9]+/g, "-") === id
+    );
   }
 
-  createProject(item: Omit<ProjectItem, "id" | "createdAt" | "updatedAt">): ProjectItem {
+  async createProject(item: Omit<ProjectItem, "id" | "createdAt" | "updatedAt">): Promise<ProjectItem> {
     const tags = item.tags || item.techStack || [];
+    const images =
+      Array.isArray(item.images) && item.images.length > 0
+        ? item.images.filter(Boolean)
+        : item.imageUrl
+        ? [item.imageUrl]
+        : [];
+    const nowIso = new Date().toISOString();
     const newProject: ProjectItem = {
       ...item,
       id: `proj-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       tags,
       techStack: tags,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      images,
+      imageUrl: images[0] || item.imageUrl || "",
+      createdAt: nowIso,
+      updatedAt: nowIso,
     };
+
+    if (this.isPostgresReady && this.pool) {
+      const res = await this.pool.query(
+        `INSERT INTO portfolio_projects (
+          id, title, slug, subtitle, description, tags, tech_stack,
+          image_url, images, live_url, project_url, github_url,
+          year, featured, sort_order, case_study, created_at, updated_at
+        ) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9::jsonb,$10,$11,$12,$13,$14,$15,$16::jsonb,$17,$18)
+        RETURNING *`,
+        [
+          newProject.id,
+          newProject.title,
+          newProject.slug || newProject.id,
+          newProject.subtitle || "",
+          newProject.description,
+          JSON.stringify(tags),
+          JSON.stringify(tags),
+          newProject.imageUrl || "",
+          JSON.stringify(images),
+          newProject.liveUrl || newProject.projectUrl || "",
+          newProject.projectUrl || newProject.liveUrl || "",
+          newProject.githubUrl || "",
+          newProject.year || "2024",
+          Boolean(newProject.featured),
+          typeof newProject.order === "number" ? newProject.order : 99,
+          newProject.caseStudy ? JSON.stringify(newProject.caseStudy) : null,
+          nowIso,
+          nowIso,
+        ]
+      );
+      return mapRowToProject(res.rows[0]);
+    }
+
     this.data.projects.push(newProject);
-    this.persist();
+    this.persistLocalJson();
     return newProject;
   }
 
-  updateProject(id: string, updates: Partial<ProjectItem>): ProjectItem | null {
+  async updateProject(id: string, updates: Partial<ProjectItem>): Promise<ProjectItem | null> {
+    if (this.isPostgresReady && this.pool) {
+      const existing = await this.getProjectById(id);
+      if (!existing) return null;
+
+      const tags = updates.tags || updates.techStack || existing.tags || [];
+      let images: string[];
+      if (Array.isArray(updates.images)) {
+        images = updates.images.filter(Boolean);
+      } else if (updates.imageUrl !== undefined) {
+        images = updates.imageUrl ? [updates.imageUrl] : [];
+      } else {
+        images = existing.images || (existing.imageUrl ? [existing.imageUrl] : []);
+      }
+      const imageUrl = images[0] || "";
+
+      const merged: ProjectItem = {
+        ...existing,
+        ...updates,
+        tags,
+        techStack: tags,
+        images,
+        imageUrl,
+        updatedAt: new Date().toISOString(),
+      };
+
+      const res = await this.pool.query(
+        `UPDATE portfolio_projects SET
+          title = $2,
+          slug = $3,
+          subtitle = $4,
+          description = $5,
+          tags = $6::jsonb,
+          tech_stack = $7::jsonb,
+          image_url = $8,
+          images = $9::jsonb,
+          live_url = $10,
+          project_url = $11,
+          github_url = $12,
+          year = $13,
+          featured = $14,
+          sort_order = $15,
+          case_study = $16::jsonb,
+          updated_at = NOW()
+        WHERE id = $1
+        RETURNING *`,
+        [
+          existing.id,
+          merged.title,
+          merged.slug || existing.slug || existing.id,
+          merged.subtitle || "",
+          merged.description,
+          JSON.stringify(tags),
+          JSON.stringify(tags),
+          imageUrl,
+          JSON.stringify(images),
+          merged.liveUrl || merged.projectUrl || "",
+          merged.projectUrl || merged.liveUrl || "",
+          merged.githubUrl || "",
+          merged.year || "2024",
+          Boolean(merged.featured),
+          typeof merged.order === "number" ? merged.order : 99,
+          merged.caseStudy ? JSON.stringify(merged.caseStudy) : null,
+        ]
+      );
+      if ((res.rowCount ?? 0) === 0) return null;
+      return mapRowToProject(res.rows[0]);
+    }
+
     const idx = this.data.projects.findIndex((p) => p.id === id);
     if (idx === -1) return null;
-    const tags = updates.tags || updates.techStack || this.data.projects[idx].tags || [];
+    const existing = this.data.projects[idx];
+    const tags = updates.tags || updates.techStack || existing.tags || [];
+    let images: string[];
+    if (Array.isArray(updates.images)) {
+      images = updates.images.filter(Boolean);
+    } else if (updates.imageUrl !== undefined) {
+      images = updates.imageUrl ? [updates.imageUrl] : [];
+    } else {
+      images = existing.images || (existing.imageUrl ? [existing.imageUrl] : []);
+    }
+    const imageUrl = images[0] || "";
     const updated: ProjectItem = {
-      ...this.data.projects[idx],
+      ...existing,
       ...updates,
       tags,
       techStack: tags,
+      images,
+      imageUrl,
       updatedAt: new Date().toISOString(),
     };
     this.data.projects[idx] = updated;
-    this.persist();
+    this.persistLocalJson();
     return updated;
   }
 
-  deleteProject(id: string): boolean {
+  async deleteProject(id: string): Promise<boolean> {
+    if (this.isPostgresReady && this.pool) {
+      const res = await this.pool.query(`DELETE FROM portfolio_projects WHERE id = $1`, [id]);
+      return (res.rowCount ?? 0) > 0;
+    }
+
     const initialLen = this.data.projects.length;
     this.data.projects = this.data.projects.filter((p) => p.id !== id);
     const deleted = this.data.projects.length < initialLen;
-    if (deleted) this.persist();
+    if (deleted) this.persistLocalJson();
     return deleted;
   }
 
+  // ============================================================================
   // Scores CRUD
-  getLeaderboard(limit = 10): TypingScoreItem[] {
+  // ============================================================================
+  async getLeaderboard(limit = 10): Promise<TypingScoreItem[]> {
+    if (this.isPostgresReady && this.pool) {
+      const res = await this.pool.query(
+        `SELECT * FROM typing_scores ORDER BY wpm DESC, accuracy DESC, created_at ASC LIMIT $1`,
+        [limit]
+      );
+      return res.rows.map((r) => ({
+        id: r.id,
+        playerName: r.player_name,
+        wpm: Number(r.wpm),
+        accuracy: Number(r.accuracy),
+        createdAt: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString(),
+      }));
+    }
+
     return [...this.data.scores]
       .sort((a, b) => {
         if (b.wpm !== a.wpm) return b.wpm - a.wpm;
@@ -249,39 +677,108 @@ class DataStore {
       .slice(0, limit);
   }
 
-  addScore(score: Omit<TypingScoreItem, "id" | "createdAt">): TypingScoreItem {
+  async addScore(score: Omit<TypingScoreItem, "id" | "createdAt">): Promise<TypingScoreItem> {
     const newScore: TypingScoreItem = {
       ...score,
       id: `score-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       createdAt: new Date().toISOString(),
     };
+
+    if (this.isPostgresReady && this.pool) {
+      await this.pool.query(
+        `INSERT INTO typing_scores (id, player_name, wpm, accuracy, created_at)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [newScore.id, newScore.playerName, newScore.wpm, newScore.accuracy, newScore.createdAt]
+      );
+      return newScore;
+    }
+
     this.data.scores.push(newScore);
-    this.persist();
+    this.persistLocalJson();
     return newScore;
   }
 
+  // ============================================================================
   // Contact Messages
-  addMessage(msg: Omit<ContactMessage, "id" | "createdAt">): ContactMessage {
+  // ============================================================================
+  async addMessage(msg: Omit<ContactMessage, "id" | "createdAt">): Promise<ContactMessage> {
     const newMsg: ContactMessage = {
       ...msg,
       id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       createdAt: new Date().toISOString(),
     };
+
+    if (this.isPostgresReady && this.pool) {
+      await this.pool.query(
+        `INSERT INTO contact_messages (id, name, email, message, created_at)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [newMsg.id, newMsg.name, newMsg.email, newMsg.message, newMsg.createdAt]
+      );
+      return newMsg;
+    }
+
     this.data.messages.push(newMsg);
-    this.persist();
+    this.persistLocalJson();
     return newMsg;
   }
 
-  // Photos CRUD
-  getPhotos(): OffScreenPhotoItem[] {
+  // ============================================================================
+  // Off-Screen Polaroid Photos CRUD
+  // ============================================================================
+  async getPhotos(): Promise<OffScreenPhotoItem[]> {
+    if (this.isPostgresReady && this.pool) {
+      const res = await this.pool.query(
+        `SELECT * FROM portfolio_photos ORDER BY sort_order ASC, created_at ASC`
+      );
+      return res.rows.map(mapRowToPhoto);
+    }
+
     return [...(this.data.photos || [])].sort((a, b) => a.order - b.order);
   }
 
-  getPhotoById(id: string): OffScreenPhotoItem | undefined {
+  async getPhotoById(id: string): Promise<OffScreenPhotoItem | undefined> {
+    if (this.isPostgresReady && this.pool) {
+      const res = await this.pool.query(`SELECT * FROM portfolio_photos WHERE id = $1 LIMIT 1`, [
+        id,
+      ]);
+      if ((res.rowCount ?? 0) > 0) {
+        return mapRowToPhoto(res.rows[0]);
+      }
+      return undefined;
+    }
+
     return (this.data.photos || []).find((p) => p.id === id);
   }
 
-  updatePhoto(id: string, updates: Partial<OffScreenPhotoItem>): OffScreenPhotoItem | null {
+  async updatePhoto(
+    id: string,
+    updates: Partial<OffScreenPhotoItem>
+  ): Promise<OffScreenPhotoItem | null> {
+    if (this.isPostgresReady && this.pool) {
+      const existing = await this.getPhotoById(id);
+      if (!existing) return null;
+      const merged = { ...existing, ...updates };
+      const res = await this.pool.query(
+        `UPDATE portfolio_photos SET
+          caption = $2,
+          image_url = $3,
+          sort_order = $4,
+          rotation = $5,
+          updated_at = NOW()
+        WHERE id = $1
+        RETURNING *`,
+        [
+          id,
+          merged.caption || "",
+          merged.imageUrl || "",
+          typeof merged.order === "number" ? merged.order : 1,
+          typeof merged.rotation === "number" ? merged.rotation : 0,
+        ]
+      );
+      if ((res.rowCount ?? 0) === 0) return null;
+      return mapRowToPhoto(res.rows[0]);
+    }
+
     if (!this.data.photos) this.data.photos = [...DEFAULT_PHOTOS];
     const index = this.data.photos.findIndex((p) => p.id === id);
     if (index === -1) return null;
@@ -290,39 +787,100 @@ class DataStore {
       ...updates,
       updatedAt: new Date().toISOString(),
     };
-    this.persist();
+    this.persistLocalJson();
     return this.data.photos[index];
   }
 
-  updateAllPhotos(photos: OffScreenPhotoItem[]): OffScreenPhotoItem[] {
+  async updateAllPhotos(photos: OffScreenPhotoItem[]): Promise<OffScreenPhotoItem[]> {
+    if (this.isPostgresReady && this.pool) {
+      const client = await this.pool.connect();
+      try {
+        await client.query("BEGIN");
+        for (let idx = 0; idx < photos.length; idx++) {
+          const p = photos[idx];
+          const photoId = p.id || `photo-${idx + 1}`;
+          const sortOrder = typeof p.order === "number" ? p.order : idx + 1;
+          await client.query(
+            `INSERT INTO portfolio_photos (id, caption, image_url, sort_order, rotation, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+             ON CONFLICT (id) DO UPDATE SET
+               caption = EXCLUDED.caption,
+               image_url = EXCLUDED.image_url,
+               sort_order = EXCLUDED.sort_order,
+               rotation = EXCLUDED.rotation,
+               updated_at = NOW()`,
+            [
+              photoId,
+              p.caption || "",
+              p.imageUrl || "",
+              sortOrder,
+              typeof p.rotation === "number" ? p.rotation : 0,
+            ]
+          );
+        }
+        await client.query("COMMIT");
+      } catch (err) {
+        await client.query("ROLLBACK");
+        throw err;
+      } finally {
+        client.release();
+      }
+      return this.getPhotos();
+    }
+
     this.data.photos = photos.map((p, idx) => ({
       ...p,
       order: typeof p.order === "number" ? p.order : idx + 1,
       updatedAt: new Date().toISOString(),
     }));
-    this.persist();
+    this.persistLocalJson();
     return this.getPhotos();
   }
 
-  createPhoto(photo: Omit<OffScreenPhotoItem, "id">): OffScreenPhotoItem {
-    if (!this.data.photos) this.data.photos = [...DEFAULT_PHOTOS];
+  async createPhoto(photo: Omit<OffScreenPhotoItem, "id">): Promise<OffScreenPhotoItem> {
+    const nowIso = new Date().toISOString();
     const newPhoto: OffScreenPhotoItem = {
       ...photo,
       id: `photo-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      createdAt: nowIso,
+      updatedAt: nowIso,
     };
+
+    if (this.isPostgresReady && this.pool) {
+      const res = await this.pool.query(
+        `INSERT INTO portfolio_photos (id, caption, image_url, sort_order, rotation, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING *`,
+        [
+          newPhoto.id,
+          newPhoto.caption || "",
+          newPhoto.imageUrl || "",
+          typeof newPhoto.order === "number" ? newPhoto.order : 99,
+          typeof newPhoto.rotation === "number" ? newPhoto.rotation : 0,
+          nowIso,
+          nowIso,
+        ]
+      );
+      return mapRowToPhoto(res.rows[0]);
+    }
+
+    if (!this.data.photos) this.data.photos = [...DEFAULT_PHOTOS];
     this.data.photos.push(newPhoto);
-    this.persist();
+    this.persistLocalJson();
     return newPhoto;
   }
 
-  deletePhoto(id: string): boolean {
+  async deletePhoto(id: string): Promise<boolean> {
+    if (this.isPostgresReady && this.pool) {
+      const res = await this.pool.query(`DELETE FROM portfolio_photos WHERE id = $1`, [id]);
+      return (res.rowCount ?? 0) > 0;
+    }
+
     if (!this.data.photos) return false;
     const initialLen = this.data.photos.length;
     this.data.photos = this.data.photos.filter((p) => p.id !== id);
     const deleted = this.data.photos.length < initialLen;
-    if (deleted) this.persist();
+    if (deleted) this.persistLocalJson();
     return deleted;
   }
 }

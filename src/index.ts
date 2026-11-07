@@ -1,12 +1,12 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import path from "path";
 import projectsRouter from "./routes/projects";
 import typingScoresRouter from "./routes/typingScores";
 import adminRouter from "./routes/admin";
 import contactRouter from "./routes/contact";
 import photosRouter from "./routes/photos";
+import { db } from "./db/dataStore";
 
 dotenv.config();
 
@@ -22,19 +22,18 @@ const allowedOrigins = (process.env.CORS_ORIGIN || "http://localhost:3000")
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (e.g. mobile apps, curl, server-to-server)
       if (!origin) return callback(null, true);
       const isAllowed =
         allowedOrigins.includes(origin) ||
         allowedOrigins.includes("*") ||
         origin.endsWith(".vercel.app") ||
+        origin.endsWith(".workers.dev") ||
         origin.includes("localhost") ||
         origin.includes("127.0.0.1");
 
       if (isAllowed) {
         callback(null, true);
       } else {
-        // Fallback allow for public portfolio API
         callback(null, true);
       }
     },
@@ -43,9 +42,10 @@ app.use(
     allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
-app.use(express.json({ limit: "25mb" })); app.use(express.urlencoded({ limit: "25mb", extended: true }));
+app.use(express.json({ limit: "25mb" }));
+app.use(express.urlencoded({ limit: "25mb", extended: true }));
 
-// Normalize multiple slashes in URL path (e.g. //api/admin/login -> /api/admin/login)
+// Normalize multiple slashes in URL path
 app.use((req, res, next) => {
   if (req.url && req.url.includes("//")) {
     req.url = req.url.replace(/\/+/g, "/");
@@ -63,12 +63,22 @@ app.use((req, res, next) => {
   next();
 });
 
-// Health check endpoint
+// Health check endpoints
 app.get("/health", (req, res) => {
-  res.json({ status: "ok", service: "edgar-portfolio-backend", uptime: process.uptime() });
+  res.json({
+    status: "ok",
+    service: "edgar-portfolio-backend",
+    storage: db.getStorageMode(),
+    uptime: process.uptime(),
+  });
 });
 app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", service: "edgar-portfolio-backend", uptime: process.uptime() });
+  res.json({
+    status: "ok",
+    service: "edgar-portfolio-backend",
+    storage: db.getStorageMode(),
+    uptime: process.uptime(),
+  });
 });
 
 // Mount Routes
@@ -89,13 +99,16 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
   res.status(500).json({ error: "Internal Server Error" });
 });
 
-// Start Server
-app.listen(PORT, () => {
-  console.log(`===============================================`);
-  console.log(`🚀 Edgar Portfolio Backend Server is running!`);
-  console.log(`📡 URL: http://localhost:${PORT}`);
-  console.log(`🛡️ CORS Allowed: ${CORS_ORIGIN}`);
-  console.log(`===============================================`);
+// Initialize Database (PostgreSQL if DATABASE_URL is set) and Start Server
+db.init().finally(() => {
+  app.listen(PORT, () => {
+    console.log(`===============================================`);
+    console.log(`🚀 Edgar Portfolio Backend Server is running!`);
+    console.log(`📡 URL: http://localhost:${PORT}`);
+    console.log(`🗄️ Storage Mode: ${db.getStorageMode()}`);
+    console.log(`🛡️ CORS Allowed: ${CORS_ORIGIN}`);
+    console.log(`===============================================`);
+  });
 });
 
 export default app;
