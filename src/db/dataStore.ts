@@ -9,11 +9,41 @@ dotenv.config();
 const DATA_DIR = path.resolve(__dirname, "../../data");
 const DB_FILE = path.join(DATA_DIR, "db.json");
 
+export interface ProfileSettings {
+  fullName: string;
+  nickname: string;
+  role: string;
+  bio: string;
+  location: string;
+  university: string;
+  focus: string;
+  email: string;
+  availability: string;
+  cvUrl: string;
+  cvFileName: string;
+  updatedAt?: string;
+}
+
+const DEFAULT_PROFILE: ProfileSettings = {
+  fullName: "Christopher Edgar",
+  nickname: "Raged",
+  role: "Informatics Student & Full-Stack / AI Builder",
+  bio: "An Informatics student passionate about turning complex problems into clean, fast, and tactile digital products — from full-stack management systems and cross-platform Flutter mobile apps to NLP & AI explorations.",
+  location: "Kebon Jeruk, West Jakarta, Indonesia",
+  university: "B.Sc. in Informatics (S.Kom.)",
+  focus: "Web · Mobile · AI/NLP",
+  email: "edgar.edmanata@gmail.com",
+  availability: "Available for internships, freelance & collaborations",
+  cvUrl: "/CV-Christopher-Edgar.pdf",
+  cvFileName: "CV-Christopher-Edgar.pdf",
+};
+
 interface DatabaseSchema {
   projects: ProjectItem[];
   scores: TypingScoreItem[];
   messages: ContactMessage[];
   photos: OffScreenPhotoItem[];
+  profile?: ProfileSettings;
 }
 
 const DEFAULT_PROJECTS: ProjectItem[] = [
@@ -894,6 +924,61 @@ class DataStore {
     const deleted = this.data.photos.length < initialLen;
     if (deleted) this.persistLocalJson();
     return deleted;
+  }
+
+  // ==========================================
+  // PROFILE & CV SETTINGS
+  // ==========================================
+  async getProfile(): Promise<ProfileSettings> {
+    if (this.isPostgresReady && this.pool) {
+      try {
+        const res = await this.pool.query(
+          `SELECT value, updated_at FROM portfolio_meta WHERE key = 'profile_settings' LIMIT 1`
+        );
+        if ((res.rowCount ?? 0) > 0 && res.rows[0].value) {
+          const parsed = JSON.parse(res.rows[0].value);
+          return {
+            ...DEFAULT_PROFILE,
+            ...parsed,
+            updatedAt: res.rows[0].updated_at
+              ? new Date(res.rows[0].updated_at).toISOString()
+              : parsed.updatedAt,
+          };
+        }
+      } catch (err) {
+        console.warn("[DataStore] Failed to parse profile_settings from Postgres:", err);
+      }
+    }
+
+    return {
+      ...DEFAULT_PROFILE,
+      ...(this.data.profile || {}),
+    };
+  }
+
+  async updateProfile(updates: Partial<ProfileSettings>): Promise<ProfileSettings> {
+    const current = await this.getProfile();
+    const merged: ProfileSettings = {
+      ...current,
+      ...updates,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (this.isPostgresReady && this.pool) {
+      await this.pool.query(
+        `INSERT INTO portfolio_meta (key, value, updated_at)
+         VALUES ('profile_settings', $1, NOW())
+         ON CONFLICT (key) DO UPDATE SET
+           value = EXCLUDED.value,
+           updated_at = NOW()`,
+        [JSON.stringify(merged)]
+      );
+      return merged;
+    }
+
+    this.data.profile = merged;
+    this.persistLocalJson();
+    return merged;
   }
 }
 
