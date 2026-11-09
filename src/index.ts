@@ -7,6 +7,7 @@ import adminRouter from "./routes/admin";
 import contactRouter from "./routes/contact";
 import photosRouter from "./routes/photos";
 import profileRouter from "./routes/profile";
+import hanglineRouter from "./routes/hangline";
 import { db } from "./db/dataStore";
 
 dotenv.config();
@@ -89,6 +90,7 @@ app.use("/api/admin", adminRouter);
 app.use("/api/contact", contactRouter);
 app.use("/api/photos", photosRouter);
 app.use("/api/profile", profileRouter);
+app.use("/api/hangline", hanglineRouter);
 
 // 404 Handler
 app.use((req, res) => {
